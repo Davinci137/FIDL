@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image
 
 PROPERTY_FILE_PATH = './properties.json'
-MODEL_PATH = './Models/inception_with_user.tflite'
+MODEL_PATH = './Models/mobilenet_with_user.tflite'
 LABEL_PATH  = './Models/label_map.json' 
 
 def hash(string, hashtype):
@@ -189,7 +189,7 @@ def run_classification():
     pil_im = Image.fromarray(cv2_im)
 
     start_time = time.monotonic()
-    results = engine.ClassifyWithImage(pil_im,threshold=0.1,top_k=3)   
+    results = engine.classify_with_image(pil_im,threshold=0.1,top_k=3)   
     end_time = time.monotonic()
     text_lines = [
           'Inference: %.2f ms' %((end_time - start_time) * 1000),
@@ -199,11 +199,11 @@ def run_classification():
       print(' '.join(text_lines))
 
     for y, line in enumerate(text_lines):
-      cv2.putText(cv2_im,line,(11,y*20+1),fontFace=cv2.FONT_HERSHEY_SIMPLEX, color=(255, 255, 255)))
+      cv2.putText(cv2_im,line,(11,y*20+20),fontFace=cv2.FONT_HERSHEY_SIMPLEX,fontScale =0.5, color=(255, 255, 255))
 
     cv2.imshow('frame', cv2_im)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-    cap.release()
-    cv2.destroyAllWindows()
+  cap.release()
+  cv2.destroyAllWindows()
