@@ -4,6 +4,7 @@ import click
 import hashlib
 import os
 import json
+import time
 from edgetpu.basic.basic_engine import BasicEngine
 from edgetpu.classification.engine import ClassificationEngine
 from edgetpu.learn.imprinting.engine import ImprintingEngine
@@ -170,26 +171,7 @@ def retrain_model(newClass, newClass_dir):
     click.echo('Top {} : {:.0%}'.format(i+1, correct[i] / (correct[i] + wrong[i])))
   #  TODO  highlight with colors how well it perforemed
 
-def generate_svg(dwg, text_lines):
-    for y, line in enumerate(text_lines):
-      dwg.add(dwg.text(line, insert=(11, y*20+1), fill='black', font_size='20'))
-      dwg.add(dwg.text(line, insert=(10, y*20), fill='white', font_size='20'))
-
-
-def append_objs_to_img(cv2_im, objs, labels):
-    height, width, _ = cv2_im.shape
-    for obj in objs:
-        x0, y0, x1, y1 = obj.bounding_box.flatten().tolist()
-        x0, y0, x1, y1 = int(x0*width), int(y0*height), int(x1*width), int(y1*height)  
-        percent = int(100 * obj.score)
-        label = '%d%% %s' % (percent, labels[str(obj.label_id)])
-
-        cv2_im = cv2.rectangle(cv2_im, (x0, y0), (x1, y1), (0, 255, 0), 2)
-        cv2_im = cv2.putText(cv2_im, label, (x0, y0+30), 
-                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 0), 2)
-    return cv2_im
-
-def run_recognize():
+def run_classification():
   engine = ClassificationEngine(MODEL_PATH)
 
   #get labels
@@ -206,11 +188,18 @@ def run_recognize():
 
     pil_im = Image.fromarray(cv2_im)
 
-    objs = engine.DetectWithImage(pil_im, threshold=0.1,
-                                keep_aspect_ratio=True, relative_coord=True,
-                                top_k=3)
+    start_time = time.monotonic()
+    results = engine.ClassifyWithImage(pil_im,threshold=0.1,top_k=3)   
+    end_time = time.monotonic()
+    text_lines = [
+          'Inference: %.2f ms' %((end_time - start_time) * 1000),
+    ]
+    for index, score in results:
+      text_lines.append('score=%.2f: %s' % (score, label_map[str(index)]))
+      print(' '.join(text_lines))
 
-    cv2_im = append_objs_to_img(cv2_im, objs, label_map)
+    for y, line in enumerate(text_lines):
+      cv2.putText(cv2_im,line,(11,y*20+1),fontFace=cv2.FONT_HERSHEY_SIMPLEX, color=(255, 255, 255)))
 
     cv2.imshow('frame', cv2_im)
     if cv2.waitKey(1) & 0xFF == ord('q'):

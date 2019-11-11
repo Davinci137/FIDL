@@ -57,7 +57,7 @@ def main(adduser, access, passwd):
 
     if passwd == None and access == (None,None) and adduser == None: 
         #Run facial recognition
-        libfidl.run_recognize()
+        libfidl.run_classification()
 
 if __name__ == '__main__':
     props = libfidl.load_properties()
