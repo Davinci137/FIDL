@@ -102,7 +102,7 @@ def retrain_model(newClass, newClass_dir):
   train_set = []
   test_set = []
   images = [f for f in os.listdir(newClass_dir)
-          if os.path.isfile(os.path.join(newClass_dir, f)) and newClass_dir.endswith('jpg')]
+          if os.path.isfile(os.path.join(newClass_dir, f)) and f.endswith('jpg')]
   if images:
     #25% of the pictures will be used to test the retrained model
     k = max(int(0.25 * len(images)), 1)
@@ -133,7 +133,6 @@ def retrain_model(newClass, newClass_dir):
       img = img.convert('RGB')
       img = img.resize(shape, Image.NEAREST)
       train_input.append(np.asarray(img).flatten())
-  train_input = np.array(train_input)
 
 
   #Train model
@@ -145,7 +144,7 @@ def retrain_model(newClass, newClass_dir):
   engine.save_model(MODEL_PATH)
   
   #saving labels
-  label_map[class_id] = newClass
+  label_map[class_id] = [newClass]
   with open(LABEL_PATH , 'w') as f:
     json.dump(label_map, f, indent=4)
 
