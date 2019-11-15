@@ -14,14 +14,14 @@ def main(adduser, access, passwd):
         hashed_password = libfidl.hash(click.prompt('Password', hide_input=True, confirmation_prompt=True), 'sha512')
         if click.confirm('Are you sure to grant {} access?'.format(adduser)):
             click.echo(click.style('Granting access', fg= 'green'))
-
+           
+            #retrain Model
+            libfidl.retrain_model(adduser,path)
+            click.echo(click.style('Done. User added!', fg= 'green'))
             #Save user to properties
             props['user'][adduser] = {'password': hashed_password, 'access': True}
             libfidl.save_properties(props)
             
-            #retrain Model
-            libfidl.retrain_model(adduser,path)
-            click.echo(click.style('Done. User added!', fg= 'green'))
         else:
             click.echo(click.style('Abort', fg= 'red'))
 
