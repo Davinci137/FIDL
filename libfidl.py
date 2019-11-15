@@ -121,8 +121,7 @@ def retrain_model(newClass, newClass_dir):
     label_map = json.load(f)
 
   #determining label for new class
-  class_id = int(sorted(label_map.keys())[-1]) +1 
-
+  class_id = int(list(label_map.keys())[-1]) +1 
   click.echo('Processing {}'.format(newClass))
   click.echo('This may take longer...')
 
