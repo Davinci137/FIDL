@@ -10,18 +10,24 @@ import libfidl
 def main(adduser, access, passwd):
     if adduser:
         path = click.prompt('Path to new users pictures', type=click.Path(exists=True, file_okay= False, dir_okay= True))
-
+        
+        #check whether path is of Images in User directory
+        if not os.getcwd() + '/User' == path[:path.rfind('/')]:
+            #warn user
+            click.echo(click.style('Warning! {} is not in recommendet User directory.'.format(path), fg='yellow'))
+        #check whtether picture folder has same name as User
+        if not adduser == path[path.rfind('/')+1:]:
+            #warn user
+            click.echo(click.style('Warning! Foldername {} should match username {}.'.format(path[path.rfind('/')+1:], adduser), fg='yellow'))
+ 
         hashed_password = libfidl.hash(click.prompt('Password', hide_input=True, confirmation_prompt=True), 'sha512')
         if click.confirm('Are you sure to grant {} access?'.format(adduser)):
             click.echo(click.style('Granting access', fg= 'green'))
-           
+
+            props['user'][adduser] = {'password': hashed_password, 'access': True, 'images':path}
             #retrain Model
-            libfidl.retrain_model(adduser,path)
+            libfidl.retrain_model(props)
             click.echo(click.style('Done. User added!', fg= 'green'))
-            #Save user to properties
-            props['user'][adduser] = {'password': hashed_password, 'access': True}
-            libfidl.save_properties(props)
-            
         else:
             click.echo(click.style('Abort', fg= 'red'))
 
@@ -57,7 +63,7 @@ def main(adduser, access, passwd):
 
     if passwd == None and access == (None,None) and adduser == None: 
         #Run facial recognition
-        libfidl.run_classification()
+        libfidl.run_classification(props)
 
 if __name__ == '__main__':
     props = libfidl.load_properties()

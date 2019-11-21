@@ -13,8 +13,6 @@ import numpy as np
 from PIL import Image
 
 PROPERTY_FILE_PATH = './properties.json'
-MODEL_PATH = './Models/mobilenet_with_user.tflite'
-LABEL_PATH  = './Models/label_map.json' 
 
 def hash(string, hashtype):
    """
@@ -38,15 +36,11 @@ def load_properties():
     with open(PROPERTY_FILE_PATH) as f:
         properties = json.load(f)
         
-    required_entries = set({'user'})
+    required_entries = set({'user','model'})
     
     missing_entries = required_entries - properties.keys()
     if not len(missing_entries) == 0:
-        click.echo(click.style('{} missing in properites'.format(str(missing_entries)), fg= 'red'))
-        click.echo('Adding missing properties')
-        properties = {**properties, **{entry:{} for entry in missing_entries}}
-        #save to file
-        save_properties(properties)
+        raise Exception('Propeties corrupted! {} missing.'.format(str(missing_entries)))
 
     return properties
 
@@ -58,123 +52,139 @@ def save_properties(data):
         json.dump(data, f, sort_keys=True, indent=4)    
 
 def user_exist(username):
-  """
-    Checks if a user with the given username exists.
+    """
+        Checks if a user with the given username exists.
 
-    :param username: the name of a user
-    :type username: string
-    :return type: boolean
-  """
-  #loading all user
-  user = load_properties()['user'] 
-  return username in user.keys()
+        :param username: the name of a user
+        :type username: string
+        :return type: boolean
+    """
+    #loading all user
+    user = load_properties()['user'] 
+    return username in user.keys()
 
 class Username(click.ParamType):
-  """
-    Custom Type class for click for usernames, to check for new usernames or for current usernames.
-  """
-  def __init__(self, new=True):
-    self.new = new
+    """
+        Custom Type class for click for usernames, to check for new usernames or for current usernames.
 
-  def convert(self, value, param, ctx):
-    if not type(value) == str:
-      self.fail('expected string for username, got'f"{value!r} of type {type(value.__name__)}",param,ctx)
-    if self.new:
-      if user_exist(value):
-        self.fail(f"{value!r} is already taken!", param, ctx)
-      else:
-        return value
-    else:
-      if user_exist(value):
-        return value
-      else:
-        self.fail(f"{value!r} does not exist!", param, ctx)
-    return value
- 
+        :param new: True if class shoud check whether a new username is already taken
+        :type new: boolean
+    """
+    def __init__(self, new=True):
+        self.new = new
 
-def retrain_model(newClass, newClass_dir):
-  """
-    This function is using the Imprinting technique to retrain the model by only changing the last layer.
-    Further, the original classifications will be kept and knew ones will be added.
-  """
-  ##IMPORTANT this is going thorgh a directroy and training multiple user, but we only want to train one user
-  click.echo('Parsing data for retraining...')
-  train_set = []
-  test_set = []
-  images = [f for f in os.listdir(newClass_dir)
-          if os.path.isfile(os.path.join(newClass_dir, f)) and f.endswith('jpg')]
-  if images:
-    #25% of the pictures will be used to test the retrained model
-    k = max(int(0.25 * len(images)), 1)
-    test_set = images[:k]
-    assert test_set, 'No images to test [{}]'.format(newClass)
-    train_set = images[k:]
-    assert train_set, 'No images to train [{}]'.format(newClass)
-  
-  #get shape of model to retrain
-  tmp = BasicEngine(MODEL_PATH)
-  input_tensor = tmp.get_input_tensor_shape()
-  shape = (input_tensor[2], input_tensor[1])
+    def convert(self, value, param, ctx):
+        """
+        This is a function used by click.
 
-  #get current labels from the untrained model
-  with open(LABEL_PATH) as f:
-    label_map = json.load(f)
-
-  #determining label for new class
-  class_id = int(list(label_map.keys())[-1]) +1 
-  click.echo('Processing {}'.format(newClass))
-  click.echo('This may take longer...')
-
-  #rezising pictures
-  train_input = []
-  for filename in train_set:
-    with Image.open(os.path.join(newClass_dir, filename)) as img:
-      img = img.convert('RGB')
-      img = img.resize(shape, Image.NEAREST)
-      train_input.append(np.asarray(img).flatten())
-
-
-  #Train model
-  click.echo('Start training')
-  engine = ImprintingEngine(MODEL_PATH, keep_classes=True)
-  engine.train(train_input, class_id)
-  click.echo(click.style('Training finished!', fg='green'))
-
-  engine.save_model(MODEL_PATH)
-  
-  #saving labels
-  label_map[class_id] = [newClass]
-  with open(LABEL_PATH , 'w') as f:
-    json.dump(label_map, f, indent=4)
-
-  #Evaluating how well the retrained model performed
-  click.echo('Start evaluation')
-  engine = ClassificationEngine(MODEL_PATH)
-  top_k = 5
-  correct = [0] * top_k
-  wrong = [0] * top_k
-  for img_name in test_set:
-    img = Image.open(os.path.join(newClass_dir, img_name))
-    candidates = engine.classify_with_image(img, threshold=0.1, top_k=top_k)
-    recognized = False
-    for i in range(top_k):
-        if i < len(candidates) and newClass in label_map[candidates[i][0]]:
-          recognized = True
-        if recognized:
-          correct[i] = correct[i] + 1
+        :param value: the username in interest
+        :type value : string
+        :return type: string
+        """
+        if not type(value) == str:
+            self.fail('expected string for username, got'f"{value!r} of type {type(value.__name__)}",param,ctx)
+        if self.new:
+            if user_exist(value):
+                self.fail(f"{value!r} is already taken!", param, ctx)
+            else:
+                return value
         else:
-          wrong[i] = wrong[i] + 1
-  click.echo('Evaluation Results:')
-  for i in range(top_k):
-    click.echo('Top {} : {:.0%}'.format(i+1, correct[i] / (correct[i] + wrong[i])))
-  #  TODO  highlight with colors how well it perforemed
+            if user_exist(value):
+                return value
+            else:
+                self.fail(f"{value!r} does not exist!", param, ctx)
+            return value
+    
 
-def run_classification():
-  engine = ClassificationEngine(MODEL_PATH)
+def retrain_model(props):
+    """
+        This function is using the Imprinting technique to retrain the model by only changing the last layer.
+        All classes will be abandoned while training multiple users
+    """
+    MODEL_PATH = props['model']['default_path']
+
+    click.echo('Parsing data for retraining...')
+    train_set = {}
+    test_set = {}
+    for user in props['user'].keys():
+        image_dir = props['user'][user]['images']
+        images = [f for f in os.listdir(image_dir)
+                if os.path.isfile(os.path.join(image_dir, f))]
+        if images:
+            #25% of the pictures will be used to test the retrained model
+            k = max(int(0.25 * len(images)), 1)
+            test_set[user] = images[:k]
+            assert test_set, 'No images to test [{}]'.format(user)
+            train_set[user] = images[k:]
+            assert train_set, 'No images to train [{}]'.format(user)
+        
+    #get shape of model to retrain
+    tmp = BasicEngine(MODEL_PATH)
+    input_tensor = tmp.get_input_tensor_shape()
+    shape = (input_tensor[2], input_tensor[1])
+
+    #rezising pictures and creating new labels map
+    train_input = []
+    labels_map = {}
+    for user_id, (user, image_list) in enumerate(train_set.items()):
+        for filename in image_list:
+            with Image.open(filename) as img:
+                img = img.convert('RGB')
+                img = img.resize(shape, Image.NEAREST)
+                train_input.append(np.asarray(img).flatten())
+        labels_map[user_id] = user
+
+    #Train model
+    click.echo('Start training')
+    engine = ImprintingEngine(MODEL_PATH, keep_classes=False)
+    engine.train_all(train_input)
+    click.echo(click.style('Training finished!', fg='green'))
+        
+    #gethering old model files
+    old_model = props['model']['path']
+    old_labels = props['model']['labels']
+    #saving new model
+    props['model']['path'] = 'model{}.tflite'.format(''.join(['_' + u for labels_map.values()]))
+    engine.save_model(props['model']['path'])
+    #saving labels
+    props['model']['labels'] = props['model']['path'].replace('model','labels').replace('tflite','json')
+    with open(props['model']['labels'] , 'w') as f:
+        json.dump(labels_map, f, indent=4)
+
+    #Evaluating how well the retrained model performed
+    click.echo('Start evaluation')
+    engine = ClassificationEngine(props['model']['path'])
+    top_k = 5
+    correct = [0] * top_k
+    wrong = [0] * top_k
+    for user, image_list in test_set.items():
+        for img_name in image_list:
+            img = Image.open(img_name)
+            candidates = engine.classify_with_image(img, threshold=0.1, top_k=top_k)
+            recognized = False
+            for i in range(top_k):
+                if i < len(candidates) and  user == labels_map[candidates[i][0]]:
+                recognized = True
+                if recognized:
+                correct[i] = correct[i] + 1
+                else:
+                wrong[i] = wrong[i] + 1
+        click.echo('Evaluation Results:')
+        for i in range(top_k):
+            click.echo('Top {} : {:.0%}'.format(i+1, correct[i] / (correct[i] + wrong[i])))
+        #  TODO  highlight with colors how well it perforemed
+
+    if os.path.exists(old_labels) or os.path.exists(old_model):
+        if not click.confirm('Do you want to keep old models?'):
+            os.remove(old_model)
+            os.remove(old_labels)
+
+def run_classification(props):
+  engine = ClassificationEngine(props['model']['path'])
 
   #get labels
-  with open(LABEL_PATH) as f:
-    label_map = json.load(f)
+  with open(props['model']['labels']) as f:
+    labels_map = json.load(f)
 
   cap = cv2.VideoCapture(0)
 
@@ -193,7 +203,7 @@ def run_classification():
           'Inference: %.2f ms' %((end_time - start_time) * 1000),
     ]
     for index, score in results:
-      text_lines.append('score=%.2f: %s' % (score, label_map[str(index)]))
+      text_lines.append('score=%.2f: %s' % (score, labels_map[str(index)]))
       print(' '.join(text_lines))
 
     for y, line in enumerate(text_lines):
@@ -205,3 +215,9 @@ def run_classification():
 
   cap.release()
   cv2.destroyAllWindows()
+
+
+class SmartLock(object):
+    #TODO write class for the lock 
+    def __init__(self):
+        pass
