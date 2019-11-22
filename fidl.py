@@ -26,7 +26,10 @@ def main(adduser, access, passwd):
 
             props['user'][adduser] = {'password': hashed_password, 'access': True, 'images':path}
             #retrain Model
-            libfidl.retrain_model(props)
+            if click.confirm('Do you want to retrain the Model?')
+                libfidl.retrain_model(props)
+            else:
+                libfidl.save_properties(props)
             click.echo(click.style('Done. User added!', fg= 'green'))
         else:
             click.echo(click.style('Abort', fg= 'red'))

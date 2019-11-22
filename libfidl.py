@@ -150,7 +150,6 @@ def retrain_model(props):
     props['model']['labels'] = props['model']['path'].replace('model','labels').replace('tflite','json')
     with open(props['model']['labels'] , 'w') as f:
         json.dump(labels_map, f, indent=4)
-
     #Evaluating how well the retrained model performed
     click.echo('Start evaluation')
     engine = ClassificationEngine(props['model']['path'])
@@ -178,6 +177,9 @@ def retrain_model(props):
         if not click.confirm('Do you want to keep old models?'):
             os.remove(old_model)
             os.remove(old_labels)
+            click.echo(click.style('Old models removed.', fg='green'))
+    #saving properties
+    save_properties(props)
 
 def run_classification(props):
   engine = ClassificationEngine(props['model']['path'])
