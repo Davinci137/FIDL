@@ -127,11 +127,13 @@ def retrain_model(props):
     train_input = []
     labels_map = {}
     for user_id, (user, image_list) in enumerate(train_set.items()):
+        ret = []
         for filename in image_list:
-            with Image.open(filename) as img:
+            with Image.open(os.path.join(props['user'][user]['images'],filename)) as img:
                 img = img.convert('RGB')
                 img = img.resize(shape, Image.NEAREST)
-                train_input.append(np.asarray(img).flatten())
+                ret.append(np.asarray(img).flatten())
+        train_input.append(ret)
         labels_map[user_id] = user
 
     #Train model
@@ -144,7 +146,7 @@ def retrain_model(props):
     old_model = props['model']['path']
     old_labels = props['model']['labels']
     #saving new model
-    props['model']['path'] = 'model{}.tflite'.format(''.join(['_' + u for labels_map.values()]))
+    props['model']['path'] = 'model{}.tflite'.format(''.join(['_' + u for u in labels_map.values()]))
     engine.save_model(props['model']['path'])
     #saving labels
     props['model']['labels'] = props['model']['path'].replace('model','labels').replace('tflite','json')
@@ -158,16 +160,16 @@ def retrain_model(props):
     wrong = [0] * top_k
     for user, image_list in test_set.items():
         for img_name in image_list:
-            img = Image.open(img_name)
+            img = Image.open(os.path.join(props['user'][user]['images'],img_name))
             candidates = engine.classify_with_image(img, threshold=0.1, top_k=top_k)
             recognized = False
             for i in range(top_k):
                 if i < len(candidates) and  user == labels_map[candidates[i][0]]:
-                recognized = True
+                    recognized = True
                 if recognized:
-                correct[i] = correct[i] + 1
+                    correct[i] = correct[i] + 1
                 else:
-                wrong[i] = wrong[i] + 1
+                    wrong[i] = wrong[i] + 1
         click.echo('Evaluation Results:')
         for i in range(top_k):
             click.echo('Top {} : {:.0%}'.format(i+1, correct[i] / (correct[i] + wrong[i])))

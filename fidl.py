@@ -26,7 +26,7 @@ def main(adduser, access, passwd):
 
             props['user'][adduser] = {'password': hashed_password, 'access': True, 'images':path}
             #retrain Model
-            if click.confirm('Do you want to retrain the Model?')
+            if click.confirm('Do you want to retrain the Model?'):
                 libfidl.retrain_model(props)
             else:
                 libfidl.save_properties(props)
