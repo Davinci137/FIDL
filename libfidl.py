@@ -8,6 +8,7 @@ import time
 from edgetpu.basic.basic_engine import BasicEngine
 from edgetpu.classification.engine import ClassificationEngine
 from edgetpu.learn.imprinting.engine import ImprintingEngine
+from edgetpu.detection.engine import DetectionEngine
 import cv2
 import numpy as np
 from PIL import Image
@@ -36,7 +37,7 @@ def load_properties():
     with open(PROPERTY_FILE_PATH) as f:
         properties = json.load(f)
         
-    required_entries = set({'user','model'})
+    required_entries = set({'user','classification','detection'})
     
     missing_entries = required_entries - properties.keys()
     if not len(missing_entries) == 0:
@@ -94,14 +95,43 @@ class Username(click.ParamType):
             else:
                 self.fail(f"{value!r} does not exist!", param, ctx)
             return value
-    
 
+def process_user_pictures(props,source,destination):
+    click.echo('Fetching files...')
+    image_list = [f for f in os.listdir(source)
+            if os.path.isfile(os.path.join(source, f))]
+    detection = DetectionEngine(props['detection'])
+    click.echo('Looking for faces..')
+
+    found_faces = 0 
+    for filename in image_list:
+        cv2_im = cv2.imread(os.path.join(source,filename))
+        pil_im = Image.fromarray(cv2_im)
+        #searching for faces in the picture 
+        faces = detection.detect_with_image(pil_im,threshold = 0.1, top_k =3,keep_aspect_ratio=True,relative_coord=True)
+        click.echo('Found {} faces in {}'.format(len(faces),filename))
+        #check each face and append results to frame
+        height, width, _= cv2_im.shape
+        cnt = 0
+        for face in faces:
+            x0, y0, x1, y1 = face.bounding_box.flatten().tolist()
+            x0, y0, x1, y1 = int(x0*width), int(y0*height), int(x1*width), int(y1*height)
+            #crop out face from camera picture
+            face_im = cv2_im[y0:y1,x0:x1]
+            #save image
+            new_filename = filename[:filename.rfind('.')] + '_' + str(cnt) + '_' +filename[filename.rfind('.'):] 
+            click.echo('Saving {}'.format(new_filename))
+            cv2.imwrite(os.path.join(destination,new_filename), face_im)
+            cnt += 1
+        found_faces += cnt
+    click.echo(click.style("Done! From {} images we could find {} faces ".format(len(image_list), found_faces), fg='green'))
+ 
 def retrain_model(props):
     """
         This function is using the Imprinting technique to retrain the model by only changing the last layer.
         All classes will be abandoned while training multiple users
     """
-    MODEL_PATH = props['model']['default_path']
+    MODEL_PATH = props['classification']['default_path']
 
     click.echo('Parsing data for retraining...')
     train_set = {}
@@ -111,8 +141,18 @@ def retrain_model(props):
         images = [f for f in os.listdir(image_dir)
                 if os.path.isfile(os.path.join(image_dir, f))]
         if images:
-            #25% of the pictures will be used to test the retrained model
-            k = max(int(0.25 * len(images)), 1)
+            # allocate the number of images for training an validation
+            net_pictures =len(images)
+            click.echo(click.style('We found {} pictures for {}'.format(net_pictures,user),fg='green'))
+            while True: 
+                k = int(click.prompt('How many pictures do you want for validating the training?'))
+                if k > 0.25*net_pictures: 
+                    click.echo(click.style('At most 25% ({} pictures) of the training data can be used for testing the model!'.format(int(0.25*net_pictures)), fg='yellow'))
+                elif k <2:
+                    click.echo(click.style('At least 3 pictues must be used for testing the model!', fg='yellow'))
+                else:
+                    break
+            
             test_set[user] = images[:k]
             assert test_set, 'No images to test [{}]'.format(user)
             train_set[user] = images[k:]
@@ -133,9 +173,8 @@ def retrain_model(props):
                 img = img.convert('RGB')
                 img = img.resize(shape, Image.NEAREST)
                 ret.append(np.asarray(img).flatten())
-        train_input.append(ret)
+        train_input.append(np.array(ret))
         labels_map[user_id] = user
-
     #Train model
     click.echo('Start training')
     engine = ImprintingEngine(MODEL_PATH, keep_classes=False)
@@ -143,18 +182,18 @@ def retrain_model(props):
     click.echo(click.style('Training finished!', fg='green'))
         
     #gethering old model files
-    old_model = props['model']['path']
-    old_labels = props['model']['labels']
+    old_model = props['classification']['path']
+    old_labels = props['classification']['labels']
     #saving new model
-    props['model']['path'] = 'model{}.tflite'.format(''.join(['_' + u for u in labels_map.values()]))
-    engine.save_model(props['model']['path'])
+    props['classification']['path'] = os.getcwd() + '/Models/model{}.tflite'.format(''.join(['_' + u for u in labels_map.values()]))
+    engine.save_model(props['classification']['path'])
     #saving labels
-    props['model']['labels'] = props['model']['path'].replace('model','labels').replace('tflite','json')
-    with open(props['model']['labels'] , 'w') as f:
+    props['classification']['labels'] = props['classification']['path'].replace('classification','labels').replace('tflite','json')
+    with open(props['classification']['labels'] , 'w') as f:
         json.dump(labels_map, f, indent=4)
     #Evaluating how well the retrained model performed
     click.echo('Start evaluation')
-    engine = ClassificationEngine(props['model']['path'])
+    engine = ClassificationEngine(props['classification']['path'])
     top_k = 5
     correct = [0] * top_k
     wrong = [0] * top_k
@@ -175,7 +214,7 @@ def retrain_model(props):
             click.echo('Top {} : {:.0%}'.format(i+1, correct[i] / (correct[i] + wrong[i])))
         #  TODO  highlight with colors how well it perforemed
 
-    if os.path.exists(old_labels) or os.path.exists(old_model):
+    if  not old_model == props['classification']['path'] and not old_labels == props['classification']['labels'] and (os.path.exists(old_labels) or os.path.exists(old_model)):
         if not click.confirm('Do you want to keep old models?'):
             os.remove(old_model)
             os.remove(old_labels)
@@ -183,43 +222,49 @@ def retrain_model(props):
     #saving properties
     save_properties(props)
 
-def run_classification(props):
-  engine = ClassificationEngine(props['model']['path'])
+def facial_recogntion(props):
+    cap = cv2.VideoCapture(0)
 
-  #get labels
-  with open(props['model']['labels']) as f:
-    labels_map = json.load(f)
+    #get labels
+    with open(props['classification']['labels']) as f:
+        labels_map = json.load(f)
 
-  cap = cv2.VideoCapture(0)
+    #loading detection model
+    detection = DetectionEngine(props['detection'])
+    classification = ClassificationEngine(props['classification']['path'])
+    while cap.isOpened():
+        ret, cv2_im = cap.read()
+        if not ret:
+            break
+        pil_im = Image.fromarray(cv2_im)
+        #searching for faces in the picture 
+        faces = detection.detect_with_image(pil_im,threshold = 0.5, top_k =3,keep_aspect_ratio=True,relative_coord=True)
+        #check each face and append results to frame
+        height, width, _= cv2_im.shape
+        for face in faces:
+            x0, y0, x1, y1 = face.bounding_box.flatten().tolist()
+            x0, y0, x1, y1 = int(x0*width), int(y0*height), int(x1*width), int(y1*height)
+            #crop out face from camera picture
+            face_im = Image.fromarray(cv2_im[y0:y1,x0:x1])
+            #classify face
+            results = classification.classify_with_image(face_im,threshold=0.1,top_k=3)   
+            #annotate frame
+            good_recognition = False
+            text_lines = []
+            for index, score in results:
+                if score >= 0.7:
+                    good_recognition = True
+                text_lines.append('score=%.2f: %s' % (score, labels_map[str(index)]))
+            
+            cv2_im = cv2.rectangle(cv2_im, (x0, y0), (x1, y1), (0, 255, 0) if good_recognition else (255,0,0), 2)
+            for y, line in enumerate(text_lines):
+                cv2.putText(cv2_im,line,(x0,y0 + y*20+20),fontFace=cv2.FONT_HERSHEY_SIMPLEX,fontScale =0.5, color=(255, 255, 255)) 
+        cv2.imshow('frame', cv2_im)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-  while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        break
-    cv2_im = frame
-
-    pil_im = Image.fromarray(cv2_im)
-
-    start_time = time.monotonic()
-    results = engine.classify_with_image(pil_im,threshold=0.1,top_k=3)   
-    end_time = time.monotonic()
-    text_lines = [
-          'Inference: %.2f ms' %((end_time - start_time) * 1000),
-    ]
-    for index, score in results:
-      text_lines.append('score=%.2f: %s' % (score, labels_map[str(index)]))
-      print(' '.join(text_lines))
-
-    for y, line in enumerate(text_lines):
-      cv2.putText(cv2_im,line,(11,y*20+20),fontFace=cv2.FONT_HERSHEY_SIMPLEX,fontScale =0.5, color=(255, 255, 255))
-
-    cv2.imshow('frame', cv2_im)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-  cap.release()
-  cv2.destroyAllWindows()
-
+    cap.release()
+    cv2.destroyAllWindows()
 
 class SmartLock(object):
     #TODO write class for the lock 

@@ -1,10 +1,11 @@
 {
     "user": {
        },
-    "model": {
+    "classification": {
        "default_path": "./Models/mobilenet_v1_1.0_224_l2norm_quant_edgetpu.tflite", 
        "default_labels": "./Models/mobilenet_label_map.json",
        "path": "",
        "labels":""
-    }
+    },
+    "detection":"./Models/mobilenet_ssd_v2_face_quant_postprocess_edgetpu.tflite"
 }

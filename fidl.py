@@ -7,32 +7,28 @@ import libfidl
 @click.option('--adduser', type=libfidl.Username(), help = '[username] Give a new person access to the room. This retrains the AI and provides access to the Website.')
 @click.option('--access', type = (str,str), default = (None, None), help = '[username] [y/n] Change the Access of a user to the room and the website.')
 @click.option('--passwd', type=libfidl.Username(new=False), help = '[username] Change the password of an existing user')
-def main(adduser, access, passwd):
+@click.option('--retrain', is_flag=True)
+def main(adduser, access, passwd, retrain):
     if adduser:
         path = click.prompt('Path to new users pictures', type=click.Path(exists=True, file_okay= False, dir_okay= True))
         
-        #check whether path is of Images in User directory
-        if not os.getcwd() + '/User' == path[:path.rfind('/')]:
-            #warn user
-            click.echo(click.style('Warning! {} is not in recommendet User directory.'.format(path), fg='yellow'))
-        #check whtether picture folder has same name as User
-        if not adduser == path[path.rfind('/')+1:]:
-            #warn user
-            click.echo(click.style('Warning! Foldername {} should match username {}.'.format(path[path.rfind('/')+1:], adduser), fg='yellow'))
- 
-        hashed_password = libfidl.hash(click.prompt('Password', hide_input=True, confirmation_prompt=True), 'sha512')
-        if click.confirm('Are you sure to grant {} access?'.format(adduser)):
-            click.echo(click.style('Granting access', fg= 'green'))
-
-            props['user'][adduser] = {'password': hashed_password, 'access': True, 'images':path}
-            #retrain Model
-            if click.confirm('Do you want to retrain the Model?'):
-                libfidl.retrain_model(props)
-            else:
-                libfidl.save_properties(props)
-            click.echo(click.style('Done. User added!', fg= 'green'))
+        #check if there exists a directory for a user
+        processed_imdir = os.getcwd() + '/User/' + adduser
+        if os.path.isdir(processed_imdir):
+            click.echo(click.style('Warning! A folder for {} already exists in {}'.format(adduser, processed_imdir), fg= 'yellow'))
+            if not click.confirm('Do you want to continue using that directory for storing the processed images?'):
+                return 
         else:
-            click.echo(click.style('Abort', fg= 'red'))
+            os.mkdir(processed_imdir)
+        #processing pictures
+        libfidl.process_user_pictures(props,path,processed_imdir)
+
+        hashed_password = libfidl.hash(click.prompt('Password', hide_input=True, confirmation_prompt=True), 'sha512')
+        #save user
+        props['user'][adduser] = {'password': hashed_password, 'access': True, 'images':processed_imdir}
+        libfidl.save_properties(props)
+        click.echo(click.style('Done. User added!', fg= 'green'))
+        click.echo(click.style('Please check in {} the pictures before retraining the model!'.format(processed_imdir), fg='red'))
 
     if not None in access:
         username = access[0]
@@ -64,9 +60,15 @@ def main(adduser, access, passwd):
         props['user'][passwd]['password'] = hashed_password
         libfidl.save_properties(props) 
 
-    if passwd == None and access == (None,None) and adduser == None: 
+    if retrain:
+        #retraining the whole model
+        if click.confirm('Do you want to retrain the Model?'):
+            libfidl.retrain_model(props)
+        else:
+            click.echo('Abort')
+    if passwd == None and access == (None,None) and adduser == None and retrain == False: 
         #Run facial recognition
-        libfidl.run_classification(props)
+        libfidl.facial_recogntion(props)
 
 if __name__ == '__main__':
     props = libfidl.load_properties()
