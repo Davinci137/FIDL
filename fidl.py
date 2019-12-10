@@ -13,7 +13,7 @@ def main(adduser, access, passwd, retrain):
         path = click.prompt('Path to new users pictures', type=click.Path(exists=True, file_okay= False, dir_okay= True))
         
         #check if there exists a directory for a user
-        processed_imdir = os.getcwd() + '/User/' + adduser
+        processed_imdir = './User/' + adduser
         if os.path.isdir(processed_imdir):
             click.echo(click.style('Warning! A folder for {} already exists in {}'.format(adduser, processed_imdir), fg= 'yellow'))
             if not click.confirm('Do you want to continue using that directory for storing the processed images?'):

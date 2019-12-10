@@ -5,6 +5,7 @@ import hashlib
 import os
 import json
 import time
+import RPi.GPIO as GPIO
 from edgetpu.basic.basic_engine import BasicEngine
 from edgetpu.classification.engine import ClassificationEngine
 from edgetpu.learn.imprinting.engine import ImprintingEngine
@@ -185,7 +186,7 @@ def retrain_model(props):
     old_model = props['classification']['path']
     old_labels = props['classification']['labels']
     #saving new model
-    props['classification']['path'] = os.getcwd() + '/Models/model{}.tflite'.format(''.join(['_' + u for u in labels_map.values()]))
+    props['classification']['path'] = './Models/model{}.tflite'.format(''.join(['_' + u for u in labels_map.values()]))
     engine.save_model(props['classification']['path'])
     #saving labels
     props['classification']['labels'] = props['classification']['path'].replace('classification','labels').replace('tflite','json')
@@ -237,6 +238,7 @@ def facial_recogntion(props):
         if not ret:
             break
         pil_im = Image.fromarray(cv2_im)
+        # TODO check first if the there is movement in the picture before utilizing edge tpu (power saving)
         #searching for faces in the picture 
         faces = detection.detect_with_image(pil_im,threshold = 0.5, top_k =3,keep_aspect_ratio=True,relative_coord=True)
         #check each face and append results to frame
@@ -249,7 +251,7 @@ def facial_recogntion(props):
             #classify face
             results = classification.classify_with_image(face_im,threshold=0.1,top_k=3)   
             #annotate frame
-            good_recognition = False
+            good_recognition = False #TODO do the coloring in terms of the access of a person
             text_lines = []
             for index, score in results:
                 if score >= 0.7:
@@ -267,6 +269,219 @@ def facial_recogntion(props):
     cv2.destroyAllWindows()
 
 class SmartLock(object):
-    #TODO write class for the lock 
-    def __init__(self):
-        pass
+    """
+    An object for easliy interacting the SmartLock which consists of an ultra sonic sensor, a relais, a door sensor and a servo motor.
+    Functonality:
+        Fetching distance from Ultra sonics sensor
+            Approximating speed
+        Changing state of relais
+        Fetching status of the door (closed/open)
+        Manually setting angle of servo motor
+            unlocking the lock (predefined sequence of servo and relais statements)
+        Automatic unlocking when approaching the door
+    """
+    def __init__(self, trig_pin = 18, echo_pin = 24, relais_pin = 23, door_sensor_pin = 25, servo_pin = 13, max_distance = 100):
+        """
+            :param trig_pin: The pin attached to the trigger pin of the ultra sonic sensor (BCM)
+            :type trig_pin: int
+            :param echo_pin: The pin attached to the echo pin of the ultra sonic sensor (BCM)
+            :type echo_pin: int
+            :param relais_pin: The pin attached to the relais (BCM)
+            :type relais_pin: int
+            :param door_sensor_pin: The pin attached to the door sensor (BCM)
+            :type door_sensor_pin: int
+            :param servo_pin: The pin attached to the servo motor (BCM)
+            :type servo_pin: int
+            :param max_distance: The maximum distance the ultrasonic sensor should consider when gethering the distance
+            :type max_distance: int
+        """
+        self.trig_pin = trig_pin 
+        self.echo_pin = echo_pin 
+        self.relais_pin = relais_pin
+        self.door = door_sensor_pin
+        self.servo_pin = servo_pin
+        self.max_distance = max_distance
+        #initlizing the data from the ultra sonic sensor as None
+        self.measurements = []
+        self._reset_measurements()
+
+    def _init_GPIO(self):
+        """
+            Intilizing all the GPIO setting
+        """
+        GPIO.setmode(GPIO.BCM)
+        #setting up GPIO 
+        GPIO.setup(self.trig_pin, GPIO.OUT)
+        GPIO.setup(self.echo_pin, GPIO.IN)
+        GPIO.setup(self.relais_pin, GPIO.OUT)
+        GPIO.setup(self.door,GPIO.IN, pull_up_down = GPIO.PUD_UP)
+        GPIO.setup(self.servo_pin,GPIO.OUT)
+
+        #Turn relais off
+        GPIO.output(self.relais_pin, GPIO.LOW)
+
+        #set servo frequency and start pulse 
+        # you may edit the frequency depending on the frequency of your servo
+        self.pulse = GPIO.PWM(self.servo_pin, 50)
+        self.pulse.start(0)
+
+    def is_door_closed(self):
+        """
+            Returning the status of the door by reading the door sensor
+            return True if door closed
+            :return type: boolean
+        """
+        return GPIO.input(self.door)
+
+   ### Ultrosonic sensor and related algortihms ### 
+    def _reset_measurements(self):
+        """
+            setting all measurements to None
+        """
+        self.measurements = [None for i in range(10)]
+
+    def get_distance(self):
+        """
+            Fetching distance from ultrosonic sensor within the defined range
+            returning None if distance is greater the predefinec max_measurment
+            measurements in centimeter
+            :return type: float or None
+
+        """
+        #Triggering the ultrasonic sensor to play sound.
+        GPIO.output(self.trig_pin, True)
+        time.sleep(0.00001)
+        GPIO.output(self.trig_pin, False)
+            
+        #initilzing time variables
+        StartTime = time.time()
+        StopTime = time.time()
+    
+        #Fetching the start time until the ourtuut of the echo pin of the sensor changes from Low to high 
+        while GPIO.input(self.echo_pin) == 0:
+            StartTime = time.time()
+
+        #Fetching end time 
+        while GPIO.input(self.echo_pin) == 1:
+            StopTime = time.time()
+    
+        # time difference between start and arrival
+        TimeElapsed = StopTime - StartTime
+        # multiply with the sonic speed (34300 cm/s) in air and take account double travel
+        distance = round((TimeElapsed * 34300) / 2, 2)
+
+        #ignoring all values which are not in range
+        if distance > self.max_distance:
+            return None
+        return distance
+
+    def approach_detected(self):
+        """
+            Function to determin if something is approaching the Sensor
+            This use linear regression to approximate the approaching speed
+
+            :return type: boolean
+        """
+        if None in self.measurements:
+            #Not enough critical data was gethered
+            return False
+
+        #using linear regression to determine an approach
+        x = [pt[0] for pt in self.measurements]
+        x_mean = round(sum(x) / len(x), 2)
+        y = [pt[1] for pt in self.measurements]
+        y_mean = round(sum(y) / len(y), 2)
+
+        #slope is equivalent to the approaching speed
+        speed = round(sum([(pt[0] - x_mean)*(pt[1] - y_mean) for pt in self.measurements])/sum([(x-x_mean)**2 for x in x]),2)
+
+        #threshould is an approaching speed of 35cm per second 
+        if speed <= -35:
+            return True
+
+        #no approach
+        return False
+
+    #####################################################
+
+    ####         Servo and related algorithms        ####
+
+    def _set_servo_angle(self,angle):
+        """
+            Moving the Servo motor to a predefined valid angle
+            
+            :param angle: an angle between 0 and 180
+            :type angle: int
+        """
+        if angle >= 0 and angle <= 180:
+            # you may change this depending on your servo
+            duty = float(angle) /12 
+            self.pulse.ChangeDutyCycle(duty)
+            time.sleep(1)
+            # 0 pulse means it is inactive
+            self.pulse.ChangeDutyCycle(0)
+
+    def _set_servo_power(self, state):
+        """
+            Powering on/off the servo motor with relais
+
+            :param state: True for High (on), False for Low (off)
+            :type state: boolean
+        """
+        GPIO.output(self.relais_pin, state)
+
+    def unlock(self):
+        """
+            Sequence to unlock the door by using the servo motor
+            You may edit the angles to adjust it your lock
+        """
+        #power servo on
+        self._set_servo_power(True)
+        #moving servo to unlocking position
+        self._set_servo_angle(30)
+        time.sleep(5)
+        #moving the servo back to a resting postion
+        self._set_servo_angle(72)
+        #giving the servo enough time to move there before turning it off
+        time.sleep(2)
+        self._set_servo_power(False)
+
+    ##################################################
+
+    def run(self):
+        """
+            Constantly checking wheather someone tries to leave the room, to unlock the door
+        """
+        try:
+            self._init_GPIO()
+            #move servo to resting postion
+            self._set_servo_power(True)
+            self._set_servo_angle(72)
+            time.sleep(2)
+            self._set_servo_power(False)
+
+            #taking measueremnts and gethering approaching status
+            while True:
+                #unlocking is only relevant if the door is closed
+                if self.is_door_closed():
+                    for i in range(len(self.measurements)):
+                        self.measurements[i] = (time.time(),self.get_distance())
+                        time.sleep(0.01)
+                        if not self.is_door_closed():
+                            self._reset_measurements()
+                            break
+                        elif self.approach_detected(): 
+                            #unlocking the door
+                            self.unlock()
+                            self._reset_measurements()
+
+        except KeyboardInterrupt:
+            #move servo to resting postion
+            self._set_servo_power(True)
+            self._set_servo_angle(72)
+            time.sleep(2)
+            self.pulse.stop()
+            self._set_servo_power(False)
+
+            GPIO.cleanup()
+#TODO turn realais way in advance on (maybe servo as well) because there might be issues with turning it right before moving the servo
