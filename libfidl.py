@@ -13,6 +13,7 @@ from edgetpu.detection.engine import DetectionEngine
 import cv2
 import numpy as np
 from PIL import Image
+import threading
 
 PROPERTY_FILE_PATH = './properties.json'
 
@@ -223,7 +224,17 @@ def retrain_model(props):
     #saving properties
     save_properties(props)
 
-def facial_recogntion(props):
+def facial_recogntion(props, smartLock):
+    """
+        Processing camera pictures with multiple AI's and executing background jobs.
+        This is the main loop for the Door Lock.
+        AI stages: Movement detection -> Face detection -> Face classification
+
+        :param props: Necessery predefined properties 
+        :type props: Dictonary
+        :param smartLock: object used to access unlocking functions and door status
+        :type smartLock: SmartLock object
+    """
     cap = cv2.VideoCapture(0)
 
     #get labels
@@ -237,6 +248,18 @@ def facial_recogntion(props):
         ret, cv2_im = cap.read()
         if not ret:
             break
+        # flip picture
+        cv2_im = cv2.flip(cv2_im,-1)
+        # Skip classification if door is open
+        if not smartLock.is_door_closed():
+            #shuffle all the pixels and make the picture unrecoginzable
+            cv2_im = cv2.randShuffle(cv2_im)
+            #TODO Indicate that door is open
+            cv2.imshow('FIDL', cv2_im)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            continue
+
         pil_im = Image.fromarray(cv2_im)
         # TODO check first if the there is movement in the picture before utilizing edge tpu (power saving)
         #searching for faces in the picture 
@@ -251,17 +274,23 @@ def facial_recogntion(props):
             #classify face
             results = classification.classify_with_image(face_im,threshold=0.1,top_k=3)   
             #annotate frame
-            good_recognition = False #TODO do the coloring in terms of the access of a person
+            best_result = (0,0) # index, score
             text_lines = []
             for index, score in results:
-                if score >= 0.7:
-                    good_recognition = True
-                text_lines.append('score=%.2f: %s' % (score, labels_map[str(index)]))
+                if score > best_result[1]:
+                    best_result = (index, score)
+                text_lines.append('score=%.2f: %s' % (score, labels_map[str(index)])) #TODO decide to show all scores or only best score
             
-            cv2_im = cv2.rectangle(cv2_im, (x0, y0), (x1, y1), (0, 255, 0) if good_recognition else (255,0,0), 2)
+            access_granted = props['user'][labels_map[str(best_result[0])]]['access'] and score >= 0.9 
+            #open the door
+            if access_granted and smartLock.unlocking == False:
+                threading.Thread(target = smartLock.unlock, daemon = True).start()
+            # TODO indicate unlocking
+            #Coloring green if access was granted 
+            cv2_im = cv2.rectangle(cv2_im, (x0, y0), (x1, y1), (0, 255, 0) if access_granted else (0,0,255), 2)
             for y, line in enumerate(text_lines):
-                cv2.putText(cv2_im,line,(x0,y0 + y*20+20),fontFace=cv2.FONT_HERSHEY_SIMPLEX,fontScale =0.5, color=(255, 255, 255)) 
-        cv2.imshow('frame', cv2_im)
+                cv2.putText(cv2_im,line,(x0 + 10,y0 + y*20+20),fontFace=cv2.FONT_HERSHEY_SIMPLEX,fontScale =0.5, color=(255, 255, 255)) 
+        cv2.imshow('FIDL', cv2_im)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
@@ -304,6 +333,7 @@ class SmartLock(object):
         #initlizing the data from the ultra sonic sensor as None
         self.measurements = []
         self._reset_measurements()
+        self.unlocking = False
 
     def _init_GPIO(self):
         """
@@ -338,7 +368,7 @@ class SmartLock(object):
         """
             setting all measurements to None
         """
-        self.measurements = [None for i in range(10)]
+        self.measurements = [(None, None) for i in range(10)]
 
     def get_distance(self):
         """
@@ -382,7 +412,7 @@ class SmartLock(object):
 
             :return type: boolean
         """
-        if None in self.measurements:
+        if any([None in pt for pt in self.measurements]): #TODO fix that somehow
             #Not enough critical data was gethered
             return False
 
@@ -395,8 +425,8 @@ class SmartLock(object):
         #slope is equivalent to the approaching speed
         speed = round(sum([(pt[0] - x_mean)*(pt[1] - y_mean) for pt in self.measurements])/sum([(x-x_mean)**2 for x in x]),2)
 
-        #threshould is an approaching speed of 35cm per second 
-        if speed <= -35:
+        #threshould is an approaching speed of 30cm per second 
+        if speed <= -30:
             return True
 
         #no approach
@@ -435,6 +465,7 @@ class SmartLock(object):
             Sequence to unlock the door by using the servo motor
             You may edit the angles to adjust it your lock
         """
+        self.unlocking = True
         #power servo on
         self._set_servo_power(True)
         #moving servo to unlocking position
@@ -445,6 +476,7 @@ class SmartLock(object):
         #giving the servo enough time to move there before turning it off
         time.sleep(2)
         self._set_servo_power(False)
+        self.unlocking = False
 
     ##################################################
 
@@ -466,11 +498,11 @@ class SmartLock(object):
                 if self.is_door_closed():
                     for i in range(len(self.measurements)):
                         self.measurements[i] = (time.time(),self.get_distance())
-                        time.sleep(0.01)
+                        time.sleep(0.1)
                         if not self.is_door_closed():
                             self._reset_measurements()
                             break
-                        elif self.approach_detected(): 
+                        elif self.approach_detected() and self.unlocking == False: 
                             #unlocking the door
                             self.unlock()
                             self._reset_measurements()

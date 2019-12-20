@@ -1,5 +1,6 @@
 import click
 import os 
+import threading
 import libfidl
 
 
@@ -67,8 +68,12 @@ def main(adduser, access, passwd, retrain):
         else:
             click.echo('Abort')
     if passwd == None and access == (None,None) and adduser == None and retrain == False: 
+        #run the smart lock in the backgroun
+        lock = libfidl.SmartLock()
+        click.echo('Starting deamon for Smart Lock')
+        threading.Thread(target=lock.run, daemon=True).start()
         #Run facial recognition
-        libfidl.facial_recogntion(props)
+        libfidl.facial_recogntion(props,lock)
 
 if __name__ == '__main__':
     props = libfidl.load_properties()
